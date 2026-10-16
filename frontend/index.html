@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Road Annotator</title>
+  </head>
+  <body>
+    <aside id="sidebar">
+      <section>
+        <h1>Road annotator</h1>
+        <label>Area
+          <select id="area-select"><option value="">— choose an area —</option></select>
+        </label>
+        <div id="area-imagery" class="muted small"></div>
+        <label>Imagery for new areas
+          <select id="imagery-select"></select>
+        </label>
+        <button id="new-area">New area from current view</button>
+        <div id="progress" class="muted"></div>
+        <a id="export-link" class="muted" hidden>Export GeoJSON (0.1 m slices)</a>
+      </section>
+      <section id="selection"></section>
+      <section class="help">
+        <h2>Keys</h2>
+        <dl>
+          <dt>N</dt><dd>next unreviewed (intersections first)</dd>
+          <dt>D</dt><dd>mark done and go to next</dd>
+          <dt>Ctrl+Z</dt><dd>undo</dd>
+          <dt>Esc</dt><dd>deselect</dd>
+          <dt>O</dt><dd>toggle OSM overlay</dd>
+          <dt>Double-click</dt><dd>add a vertex to the selected line</dd>
+          <dt>Right-click</dt><dd>delete a vertex</dd>
+        </dl>
+      </section>
+      <div id="status" class="muted"></div>
+    </aside>
+    <div id="map"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,154 @@
+:root {
+  --bg: #17191d;
+  --panel: #202328;
+  --border: #33373e;
+  --text: #e6e8eb;
+  --muted: #9aa1ab;
+  --accent: #29b6f6;
+  --error: #ff6e6e;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  display: flex;
+}
+
+#sidebar {
+  width: 320px;
+  flex: none;
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+#map {
+  flex: 1;
+  height: 100%;
+}
+
+section {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+h1 {
+  font-size: 17px;
+  margin: 0 0 10px;
+}
+
+h2 {
+  font-size: 15px;
+  margin: 4px 0 2px;
+}
+
+label {
+  display: block;
+  margin: 8px 0;
+}
+
+label.check {
+  margin: 4px 0;
+}
+
+select,
+input[type="number"],
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+select,
+input[type="number"] {
+  width: 100%;
+  margin-top: 4px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+#new-area {
+  width: 100%;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 8px 0;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12.5px;
+}
+
+a {
+  color: var(--accent);
+}
+
+#progress,
+#export-link {
+  display: block;
+  margin-top: 8px;
+}
+
+#status {
+  margin-top: auto;
+  min-height: 1.4em;
+}
+
+#status.error {
+  color: var(--error);
+}
+
+.help dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.help dt {
+  font-weight: 600;
+}
+
+.help dd {
+  margin: 0;
+  color: var(--muted);
+}

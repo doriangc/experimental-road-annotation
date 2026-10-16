@@ -10,13 +10,13 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("ANNOTATOR_DATA", Path(__file__).resolve().parents[2] / "data"))
 
-_locks: dict[str, threading.Lock] = {}
+_locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
 
-def lock(area_id: str) -> threading.Lock:
+def lock(area_id: str) -> threading.RLock:
     with _locks_guard:
-        return _locks.setdefault(area_id, threading.Lock())
+        return _locks.setdefault(area_id, threading.RLock())  # re-entrant: loading may save a migration
 
 
 def slugify(name: str) -> str:
@@ -47,6 +47,10 @@ def _write_json(path: Path, data) -> None:
 
 def save_osm(area_id: str, raw: dict) -> None:
     _write_json(area_dir(area_id) / "osm.json", raw)
+
+
+def load_osm(area_id: str) -> dict:
+    return json.loads((area_dir(area_id) / "osm.json").read_text())
 
 
 def save(state: dict) -> None:

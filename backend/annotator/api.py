@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import edits, export, geo, graph, imagery, osm, store, templates
+from . import crosssection, edits, export, geo, graph, imagery, migrations, osm, store, templates
 
 MAX_AREA_KM2 = 4.0
 
@@ -30,9 +30,13 @@ class InitRequest(BaseModel):
 
 def _load(area_id: str) -> dict:
     try:
-        return store.load(area_id)
+        state = store.load(area_id)
     except KeyError:
         raise HTTPException(404, f"no area {area_id!r}")
+    if migrations.upgrade(state):
+        with store.lock(area_id):
+            store.save(state)
+    return state
 
 
 @app.get("/api/imagery")
@@ -42,7 +46,7 @@ def list_imagery():
 
 @app.get("/api/areas")
 def list_areas():
-    return [export.summary(store.load(a)) for a in store.list_ids()]
+    return [export.summary(_load(a)) for a in store.list_ids()]
 
 
 @app.post("/api/areas")
@@ -125,6 +129,16 @@ def init_cluster(area_id: str, cluster_id: str, body: InitRequest):
         "params": params,
         "ports": {p: {"xy": port["xy"], "heading": port["heading"]} for p, port in ports.items()},
     }
+
+
+@app.post("/api/areas/{area_id}/segments/{segment_id}/default-cross-section")
+def default_cross_section(area_id: str, segment_id: str):
+    """The cross-section prefilled from OSM tags for the segment's current centerline. Not saved."""
+    state = _load(area_id)
+    seg = state["segments"].get(segment_id)
+    if seg is None or seg["internal"]:
+        raise HTTPException(404, f"no editable segment {segment_id!r}")
+    return {"spans": crosssection.default_spans(seg)}
 
 
 @app.get("/api/areas/{area_id}/export")

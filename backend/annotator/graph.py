@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 
 import numpy as np
 
-from . import geo, templates
+from . import crosssection, geo, templates
 from .osm import OsmData
 
 DEFAULT_PARAMS = {
@@ -101,6 +101,12 @@ def build(osm: OsmData, proj: geo.Projector, bbox, params: dict | None = None) -
         ways = [osm.ways[wi] for wi, _ in keys]
         dominant = Counter(w.id for w in ways).most_common(1)[0][0]
         tags = next(w.tags for w in ways if w.id == dominant)
+        # Does the segment run the same way as its dominant OSM way? Tags like
+        # lanes:forward and parking:left are relative to the way.
+        edge, (way_index, node_index) = next(
+            (e, key) for e, key in enumerate(keys) if osm.ways[key[0]].id == dominant
+        )
+        osm_reversed = osm.ways[way_index].nodes[node_index] != nodes[edge]
         pts = np.array([xy[n] for n in nodes])
         roundabout = any(w.tags.get("junction") in ("roundabout", "circular") for w in ways)
         sid = f"s{i}"
@@ -115,6 +121,8 @@ def build(osm: OsmData, proj: geo.Projector, bbox, params: dict | None = None) -
             "oneway": tags.get("oneway") == "yes" or roundabout,
             "roundabout": roundabout,
             "bridge": tags.get("bridge") == "yes",
+            "osm_tags": dict(tags),
+            "osm_reversed": osm_reversed,
             "osm_polyline": pts.tolist(),
             "length": geo.length(pts),
             "internal": False,
@@ -124,6 +132,7 @@ def build(osm: OsmData, proj: geo.Projector, bbox, params: dict | None = None) -
             "guide_line": None,
             "centerline": None,
             "flags": [],
+            "spans": None,
             "status": "unreviewed",
             "source": "osm",
         }
@@ -223,6 +232,7 @@ def build(osm: OsmData, proj: geo.Projector, bbox, params: dict | None = None) -
 
         seg["guide_line"] = geo.sub_polyline(pts, ra, total - rb).tolist()
         seg["centerline"] = [list(p) for p in seg["guide_line"]]
+        seg["spans"] = crosssection.default_spans(seg)
 
     state = {
         "params": params,

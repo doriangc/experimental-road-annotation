@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import math
 
-from . import templates
+from . import crosssection, geo, templates
 
 STATUSES = ("unreviewed", "done")
 SEGMENT_FLAGS = ("occluded", "ambiguous", "skip")
@@ -34,13 +34,19 @@ def apply(state: dict, edits: dict) -> dict:
 
     `edits` = {"ports": {id: {xy, heading}},
                "clusters": {id: {type?, params?, flags?, status?}},
-               "segments": {id: {centerline?, flags?, status?}}}
+               "segments": {id: {centerline?, flags?, spans?, status?}}}
 
     Segment ends and freeform port nodes are always snapped to their port, so
     a port is the single source of truth for where a segment meets a template.
+    When a centerline's length changes, positions along it (spans, width points,
+    flags) are stretched to match, unless the edit sets them explicitly.
     """
     new = copy.deepcopy(state)
     touched_ports = set()
+    old_lengths = {
+        sid: geo.length(seg["centerline"])
+        for sid, seg in state["segments"].items() if seg["centerline"]
+    }
 
     for pid, edit in (edits.get("ports") or {}).items():
         port = new["ports"].get(pid)
@@ -106,6 +112,28 @@ def apply(state: dict, edits: dict) -> dict:
 
     for pid in touched_ports:
         _sync_port(new, pid)
+
+    segment_edits = edits.get("segments") or {}
+    for sid, old_length in old_lengths.items():
+        seg = new["segments"][sid]
+        length = geo.length(seg["centerline"])
+        edit = segment_edits.get(sid, {})
+        if "spans" in edit:
+            try:
+                seg["spans"] = crosssection.validate(edit["spans"], length)
+            except crosssection.CrossSectionError as e:
+                raise EditError(f"segment {sid}: {e}") from e
+        elif abs(length - old_length) > 1e-9 and seg.get("spans") and old_length > 0:
+            seg["spans"] = crosssection.rescale(seg["spans"], length / old_length)
+            seg["spans"][-1]["s_to"] = length
+        if "flags" not in edit and abs(length - old_length) > 1e-9 and old_length > 0:
+            for f in seg["flags"]:
+                f["s_from"] *= length / old_length
+                if f["s_to"] is not None:
+                    f["s_to"] *= length / old_length
+    for sid in segment_edits:
+        if "spans" in segment_edits[sid] and sid not in old_lengths:
+            raise EditError(f"segment {sid} has no centerline")
     return new
 
 

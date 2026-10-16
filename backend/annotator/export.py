@@ -61,6 +61,8 @@ def geojson(state: dict, slice_length: float | None = None) -> dict:
                 "kind": "segment", "segment_id": sid, "osm_way_ids": seg["osm_way_ids"],
                 "highway": seg["highway"], "start_port": seg["start_port"], "end_port": seg["end_port"],
                 "status": seg["status"], "source": seg["source"], "flags": seg["flags"],
+                # bands left to right in the segment's direction (start_port -> end_port)
+                "cross_section": seg["spans"],
             },
         })
     # Labels only hold for the imagery they were annotated on.

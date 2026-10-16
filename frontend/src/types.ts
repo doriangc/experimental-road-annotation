@@ -74,6 +74,36 @@ export interface SegmentFlag {
   s_to: number | null;
 }
 
+export type BandKind =
+  | "lane" | "cycle_lane" | "cycle_track" | "parking" | "sidewalk" | "median" | "verge" | "shoulder";
+
+export interface Band {
+  kind: BandKind;
+  // lane: direction, use (list), turn; parking: arrangement, surface; median: surface
+  attributes: Record<string, unknown>;
+}
+
+export interface Boundary {
+  physical: "flush" | "paving_change" | "low_kerb" | "kerb";
+  marking: "none" | "dashed" | "solid" | "double_solid" | "dashed_solid" | "solid_dashed" | "block";
+}
+
+export interface WidthPoint {
+  s: number;
+  widths: number[]; // one per band
+  shift: number; // carriageway middle, metres LEFT of the centerline
+}
+
+/** Bands run left to right in the segment's direction; boundaries.length = bands.length + 1. */
+export interface Span {
+  s_from: number;
+  s_to: number;
+  bands: Band[];
+  boundaries: Boundary[];
+  width_points: WidthPoint[];
+  source: string;
+}
+
 export interface Segment {
   id: string;
   start_junction: string;
@@ -93,6 +123,9 @@ export interface Segment {
   guide_line: XY[] | null;
   centerline: XY[] | null;
   flags: SegmentFlag[];
+  spans: Span[] | null;
+  osm_tags: Record<string, string>;
+  osm_reversed: boolean;
   status: Status;
   source: string;
 }
@@ -155,6 +188,7 @@ export interface ClusterEdit {
 export interface SegmentEdit {
   centerline?: XY[];
   flags?: SegmentFlag[];
+  spans?: Span[];
   status?: Status;
 }
 

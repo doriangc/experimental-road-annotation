@@ -120,9 +120,23 @@ def apply(state: dict, edits: dict) -> dict:
         edit = segment_edits.get(sid, {})
         if "spans" in edit:
             try:
-                seg["spans"] = crosssection.validate(edit["spans"], length)
+                spans = crosssection.validate(edit["spans"], length)
             except crosssection.CrossSectionError as e:
                 raise EditError(f"segment {sid}: {e}") from e
+            # Provenance is decided here, not by the client: a span identical to the
+            # OSM prefill is "osm", an unchanged span keeps its source, anything else is "human".
+            old_spans = state["segments"][sid].get("spans") or []
+            prefill = crosssection.default_spans(seg)
+            content = lambda span: {**span, "source": None}
+            for k, span in enumerate(spans):
+                old = old_spans[k] if k < len(old_spans) else None
+                if k < len(prefill) and content(span) == content(prefill[k]):
+                    span["source"] = "osm"
+                elif old is not None and content(span) == content(old):
+                    span["source"] = old["source"]
+                else:
+                    span["source"] = "human"
+            seg["spans"] = spans
         elif abs(length - old_length) > 1e-9 and seg.get("spans") and old_length > 0:
             seg["spans"] = crosssection.rescale(seg["spans"], length / old_length)
             seg["spans"][-1]["s_to"] = length

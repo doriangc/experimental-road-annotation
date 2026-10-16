@@ -27,7 +27,7 @@ body {
 }
 
 #sidebar {
-  width: 320px;
+  width: 380px;
   flex: none;
   overflow-y: auto;
   background: var(--panel);
@@ -151,4 +151,91 @@ a {
 .help dd {
   margin: 0;
   color: var(--muted);
+}
+
+h3 {
+  font-size: 14px;
+  margin: 14px 0 2px;
+}
+
+button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mode {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+/* Cross-section editor: boundaries and bands alternate, left to right. */
+.xs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.xs-list select {
+  width: auto;
+  margin: 0;
+  padding: 2px 4px;
+  font-size: 12.5px;
+}
+
+.xs-boundary {
+  display: flex;
+  gap: 4px;
+  padding-left: 18px;
+  border-left: 2px dashed var(--border);
+  margin-left: 6px;
+}
+
+.xs-boundary select.add {
+  color: var(--accent);
+}
+
+.xs-band {
+  display: grid;
+  grid-template-columns: 14px 1fr auto auto;
+  gap: 4px 6px;
+  align-items: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+.xs-band > button {
+  padding: 0 6px;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid #0006;
+}
+
+.xs-attrs {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.xs-attrs:empty {
+  display: none;
+}
+
+.uses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  font-size: 12.5px;
+}
+
+.uses label.check {
+  margin: 0;
 }

@@ -1,4 +1,4 @@
-import type { AreaState, AreaSummary, EditResponse, Edits, Imagery, TemplateParams, TemplateType, XY } from "./types";
+import type { AreaState, AreaSummary, EditResponse, Edits, Imagery, Span, TemplateParams, TemplateType, XY } from "./types";
 
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
@@ -36,6 +36,12 @@ export const initCluster = (id: string, clusterId: string, type: TemplateType, r
     "POST",
     `/api/areas/${encodeURIComponent(id)}/clusters/${encodeURIComponent(clusterId)}/init`,
     { type, reset_ports: resetPorts },
+  );
+
+export const defaultCrossSection = (id: string, segmentId: string) =>
+  request<{ spans: Span[] }>(
+    "POST",
+    `/api/areas/${encodeURIComponent(id)}/segments/${encodeURIComponent(segmentId)}/default-cross-section`,
   );
 
 export const exportUrl = (id: string) => `/api/areas/${encodeURIComponent(id)}/export?slices=true`;

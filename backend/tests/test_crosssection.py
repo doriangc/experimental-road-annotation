@@ -1,3 +1,4 @@
+import copy
 import json
 
 import numpy as np
@@ -150,10 +151,16 @@ def test_centerline_edits_stretch_spans_and_flags():
 def test_span_edits_are_validated():
     state = crossroads()
     sid = next(iter(state["segments"]))
-    spans = state["segments"][sid]["spans"]
+    spans = copy.deepcopy(state["segments"][sid]["spans"])
     spans[0]["width_points"][0]["widths"] = [4.2]
     new = edits.apply(state, {"segments": {sid: {"spans": spans}}})
     assert new["segments"][sid]["spans"][0]["width_points"][0]["widths"] == [4.2]
+    assert new["segments"][sid]["spans"][0]["source"] == "human"
+    unchanged = edits.apply(state, {"segments": {sid: {"spans": state["segments"][sid]["spans"]}}})
+    assert unchanged["segments"][sid]["spans"][0]["source"] == "osm"
+    # undoing back to the prefill makes it OSM again
+    undone = edits.apply(new, {"segments": {sid: {"spans": state["segments"][sid]["spans"]}}})
+    assert undone["segments"][sid]["spans"][0]["source"] == "osm"
     spans[0]["boundaries"] = []
     with pytest.raises(edits.EditError, match="boundaries"):
         edits.apply(state, {"segments": {sid: {"spans": spans}}})

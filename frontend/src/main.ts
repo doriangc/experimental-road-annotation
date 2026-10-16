@@ -6,12 +6,18 @@ import proj4 from "proj4";
 
 import * as api from "./api";
 import {
+  BAND_KINDS, KIND_COLORS, KIND_LABELS, LANE_DIRECTIONS, LANE_TURNS, LANE_USES, MARKINGS, MEDIAN_SURFACES,
+  PARKING_ARRANGEMENTS, PARKING_SURFACES, PHYSICAL, arcLengthOf, at, bandProblem, boundaryOffsets,
+  defaultAttributes, insertBand, moveBoundary, removeBand, rescaleSpans, segmentOverlay, spanIndexAt,
+  stationAt, widthsAt,
+} from "./crosssection";
+import {
   add, angleOf, dist, largestGapMid, nearestOnPolyline, polylineLength, renderCluster, scale, shiftEnd, sub,
   unit, validTypes,
 } from "./geom";
 import type {
   AreaState, AreaSummary, Cluster, ClusterEdit, DeadEndParams, Edits, FreeformParams, Imagery, Port, PointParams,
-  RoundaboutParams, Segment, SegmentEdit, TemplateType, XY,
+  RoundaboutParams, Segment, SegmentEdit, Span, TemplateType, XY,
 } from "./types";
 import "./style.css";
 
@@ -33,7 +39,8 @@ const SEGMENT_FLAGS: [string, string][] = [
 ];
 
 type Selection = { kind: "cluster" | "segment"; id: string };
-type HandleKind = "core" | "theta" | "radius" | "port" | "heading" | "vertex" | "fixed";
+type HandleKind = "core" | "theta" | "radius" | "port" | "heading" | "vertex" | "fixed" | "width";
+type EditMode = "centerline" | "cross-section";
 
 interface Handle {
   xy: XY;
@@ -58,9 +65,11 @@ let area: AreaState | null = null;
 let converter: Converter | null = null;
 let selection: Selection | null = null;
 let handles: Handle[] = [];
-let dragging: { index: number; before: Snapshot } | null = null;
+let dragging: { drag: (xy: XY) => void; before: Snapshot } | null = null;
 let undoStack: Snapshot[] = [];
 let showOsm = true;
+let showBands = true;
+let editMode: EditMode = "cross-section"; // what dragging a selected segment edits
 let saving: Promise<void> = Promise.resolve();
 let pendingSaves = 0;
 let imagerySources: Imagery[] = [];
@@ -89,7 +98,10 @@ map.touchZoomRotate.disableRotation();
 map.keyboard.disableRotation();
 
 const emptyFc = (): GeoJSON.FeatureCollection => ({ type: "FeatureCollection", features: [] });
-const SOURCES = ["bbox", "osm", "segments", "templates", "ports", "handle-links", "handles"] as const;
+const SOURCES = [
+  "bbox", "xs-bands", "xs-boundaries", "xs-markings", "xs-arrows",
+  "osm", "segments", "templates", "ports", "handle-links", "handles",
+] as const;
 const source = (id: (typeof SOURCES)[number]) => map.getSource(id) as GeoJSONSource;
 
 function addLayers() {
@@ -98,6 +110,36 @@ function addLayers() {
   map.addLayer({
     id: "bbox", type: "line", source: "bbox",
     paint: { "line-color": "#ffffff", "line-width": 1.5, "line-dasharray": [4, 3], "line-opacity": 0.6 },
+  });
+  // Cross-section overlay (line widths in metres are set per area, see setMetricWidths).
+  map.addLayer({
+    id: "xs-bands", type: "fill", source: "xs-bands",
+    paint: {
+      "fill-color": [
+        "match", ["get", "kind"], ...BAND_KINDS.flatMap((k) => [k, KIND_COLORS[k]]), "#ffffff",
+      ] as unknown as maplibregl.ExpressionSpecification,
+      "fill-opacity": 0.38,
+    },
+  });
+  map.addLayer({
+    id: "xs-edges", type: "line", source: "xs-boundaries",
+    paint: {
+      "line-color": ["match", ["get", "physical"], "kerb", "#eeeeee", "low_kerb", "#bdbdbd", "#ffffff"],
+      "line-opacity": ["match", ["get", "physical"], "kerb", 0.95, "low_kerb", 0.85, 0.35],
+    },
+  });
+  map.addLayer({
+    id: "xs-markings", type: "line", source: "xs-markings",
+    paint: { "line-color": "#ffffff", "line-opacity": 0.95 },
+  });
+  map.addLayer({
+    id: "xs-arrows", type: "line", source: "xs-arrows",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": "#ffffff", "line-opacity": 0.85 },
+  });
+  map.addLayer({
+    id: "xs-hit", type: "line", source: "xs-boundaries", filter: ["==", ["get", "segment_id"], ""],
+    paint: { "line-width": 14, "line-opacity": 0 },
   });
   map.addLayer({
     id: "osm", type: "line", source: "osm",
@@ -139,16 +181,32 @@ function addLayers() {
   map.addLayer({
     id: "handles", type: "circle", source: "handles",
     paint: {
-      "circle-radius": ["match", ["get", "kind"], "core", 7, "port", 6, "radius", 6, "fixed", 3.5, "vertex", 4.5, 5],
+      "circle-radius": [
+        "match", ["get", "kind"], "core", 7, "port", 6, "radius", 6, "fixed", 3.5, "vertex", 4.5, "width", 4.5, 5,
+      ],
       "circle-color": [
         "match", ["get", "kind"],
         "core", "#ffeb3b", "theta", "#ff9800", "radius", "#8bc34a", "port", "#ffffff",
-        "heading", "#e91e63", "vertex", "#29b6f6", "#9e9e9e",
+        "heading", "#e91e63", "vertex", "#29b6f6", "width", "#00e5ff", "#9e9e9e",
       ],
       "circle-stroke-color": "#000000",
       "circle-stroke-width": 1.5,
     },
   });
+}
+
+/** A line width of `metres` at every zoom, for an area at latitude `lat`. */
+function metricWidth(metres: number | maplibregl.ExpressionSpecification, lat: number) {
+  const metresPerPixelAtZ0 = 78271.517 * Math.cos((lat * Math.PI) / 180); // 512 px tiles
+  const at = (z: number) => ["*", metres, 2 ** z / metresPerPixelAtZ0];
+  return ["interpolate", ["exponential", 2], ["zoom"], 10, at(10), 24, at(24)] as unknown as maplibregl.ExpressionSpecification;
+}
+
+function setMetricWidths(lat: number) {
+  map.setPaintProperty("xs-edges", "line-width",
+    metricWidth(["match", ["get", "physical"], "kerb", 0.25, "low_kerb", 0.15, 0.06], lat));
+  map.setPaintProperty("xs-markings", "line-width", metricWidth(0.12, lat));
+  map.setPaintProperty("xs-arrows", "line-width", metricWidth(0.12, lat));
 }
 
 /** Show `imagery` under the overlays. Areas are locked to the imagery they were annotated on. */
@@ -210,6 +268,59 @@ function isOutsideSegment(seg: Segment): boolean {
   return a.outside && b.outside;
 }
 
+interface OverlayFeatures {
+  key: string;
+  bands: GeoJSON.Feature[];
+  boundaries: GeoJSON.Feature[];
+  markings: GeoJSON.Feature[];
+  arrows: GeoJSON.Feature[];
+}
+const overlayCache = new Map<string, OverlayFeatures>();
+
+function overlayFor(seg: Segment, reuse: boolean): OverlayFeatures {
+  const cached = overlayCache.get(seg.id);
+  if (cached && reuse) return cached;
+  const key = JSON.stringify([seg.centerline, seg.spans]);
+  if (cached && cached.key === key) return cached;
+  const o = segmentOverlay(seg.centerline!, seg.spans!);
+  const polygon = (ring: XY[], properties: Record<string, unknown>): GeoJSON.Feature => ({
+    type: "Feature", properties, geometry: { type: "Polygon", coordinates: [ring.map(toLL)] },
+  });
+  const features: OverlayFeatures = {
+    key,
+    bands: o.bands.map((b) => polygon(b.ring, { kind: b.kind, segment_id: seg.id })),
+    boundaries: o.boundaries.map((b) =>
+      lineFeature(b.line, { physical: b.physical, segment_id: seg.id, span: b.span, boundary: b.boundary })),
+    markings: o.markings.map((m) => lineFeature(m, {})),
+    arrows: o.arrows.map((a) => lineFeature(a, {})),
+  };
+  overlayCache.set(seg.id, features);
+  return features;
+}
+
+function redrawOverlay() {
+  const bands: GeoJSON.Feature[] = [], boundaries: GeoJSON.Feature[] = [];
+  const markings: GeoJSON.Feature[] = [], arrows: GeoJSON.Feature[] = [];
+  if (area && showBands) {
+    // While dragging, only the selection's segments can change.
+    const scope = dragging && selection ? new Set(relatedIds(selection).segments) : null;
+    for (const seg of Object.values(area.segments)) {
+      if (seg.internal || !seg.centerline || !seg.spans) continue;
+      const o = overlayFor(seg, scope !== null && !scope.has(seg.id));
+      bands.push(...o.bands);
+      boundaries.push(...o.boundaries);
+      markings.push(...o.markings);
+      arrows.push(...o.arrows);
+    }
+  }
+  source("xs-bands").setData({ type: "FeatureCollection", features: bands });
+  source("xs-boundaries").setData({ type: "FeatureCollection", features: boundaries });
+  source("xs-markings").setData({ type: "FeatureCollection", features: markings });
+  source("xs-arrows").setData({ type: "FeatureCollection", features: arrows });
+  const editable = selection?.kind === "segment" && editMode === "cross-section" ? selection.id : "";
+  map.setFilter("xs-hit", ["==", ["get", "segment_id"], editable]);
+}
+
 function redraw() {
   if (!area || !converter) {
     for (const id of SOURCES) source(id).setData(emptyFc());
@@ -241,6 +352,7 @@ function redraw() {
   for (const p of Object.values(area.ports)) ports.push(pointFeature(p.xy, { cluster_id: p.cluster_id }));
 
   handles = buildHandles();
+  redrawOverlay();
   source("osm").setData({ type: "FeatureCollection", features: osm });
   source("segments").setData({ type: "FeatureCollection", features: segments });
   source("templates").setData({ type: "FeatureCollection", features: tpl });
@@ -251,7 +363,10 @@ function redraw() {
   });
   source("handle-links").setData({
     type: "FeatureCollection",
-    features: handles.filter((h) => h.anchor).map((h) => lineFeature([h.anchor!, h.xy], {})),
+    features: [
+      ...handles.filter((h) => h.anchor).map((h) => lineFeature([h.anchor!, h.xy], {})),
+      ...directionMarker().map((line) => lineFeature(line, {})),
+    ],
   });
 }
 
@@ -368,7 +483,55 @@ function clusterHandles(cid: string): Handle[] {
   return hs;
 }
 
+/** Drag boundary `j` of width point `k` in span `si` of a segment. */
+function widthDrag(sid: string, si: number, k: number, j: number) {
+  return (xy: XY) => {
+    const seg = area!.segments[sid];
+    const span = seg.spans![si];
+    const wp = span.width_points[k];
+    const st = stationAt(seg.centerline!, wp.s);
+    const v = (xy[0] - st.p[0]) * st.right[0] + (xy[1] - st.p[1]) * st.right[1];
+    moveBoundary(span.bands, wp, j, v - boundaryOffsets(span.bands, wp.widths, wp.shift)[j]);
+  };
+}
+
+function widthHandles(sid: string): Handle[] {
+  const seg = area!.segments[sid];
+  if (!seg.centerline || !seg.spans) return [];
+  const hs: Handle[] = [];
+  seg.spans.forEach((span, si) => {
+    span.width_points.forEach((wp, k) => {
+      const st = stationAt(seg.centerline!, wp.s);
+      const v = boundaryOffsets(span.bands, wp.widths, wp.shift);
+      v.forEach((offset, j) => {
+        hs.push({
+          xy: at(st, offset),
+          kind: "width",
+          anchor: j > 0 ? at(st, v[j - 1]) : undefined,
+          drag: widthDrag(sid, si, k, j),
+          remove: span.width_points.length > 1
+            ? () => { area!.segments[sid].spans![si].width_points.splice(k, 1); }
+            : undefined,
+        });
+      });
+    });
+  });
+  return hs;
+}
+
+/** A chevron showing the selected segment's direction, which is what "left" and "right" refer to. */
+function directionMarker(): XY[][] {
+  if (!area || selection?.kind !== "segment") return [];
+  const line = area.segments[selection.id].centerline;
+  if (!line) return [];
+  const st = stationAt(line, polylineLength(line) / 2);
+  const tip = add(st.p, scale(st.forward, 1.5));
+  const back = sub(st.p, scale(st.forward, 0.5));
+  return [[add(back, scale(st.right, 1)), tip, sub(back, scale(st.right, 1))]];
+}
+
 function segmentHandles(sid: string): Handle[] {
+  if (editMode === "cross-section") return widthHandles(sid);
   const seg = area!.segments[sid];
   if (!seg.centerline) return [];
   const last = seg.centerline.length - 1;
@@ -432,6 +595,7 @@ function editsFor(base: Snapshot, target: Snapshot): Edits {
     const e: SegmentEdit = {};
     if (!same(b.centerline, t.centerline) && t.centerline) e.centerline = t.centerline;
     if (!same(b.flags, t.flags)) e.flags = t.flags;
+    if (!same(b.spans, t.spans) && t.spans) e.spans = t.spans;
     if (b.status !== t.status) e.status = t.status;
     if (Object.keys(e).length) edits.segments[id] = e;
   }
@@ -454,6 +618,20 @@ function restore(snap: Snapshot) {
 /** Save whatever changed in the entities captured by `before`, and make it undoable. */
 function commit(before: Snapshot) {
   if (!area) return;
+  // Positions along a segment (spans, width points, flags) stretch with its centerline.
+  for (const [sid, old] of Object.entries(before.segments)) {
+    const seg = area.segments[sid];
+    if (!old.centerline || !seg.centerline) continue;
+    const factor = polylineLength(seg.centerline) / polylineLength(old.centerline);
+    if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-12) continue;
+    if (seg.spans && same(old.spans, seg.spans)) rescaleSpans(seg.spans, factor);
+    if (same(old.flags, seg.flags)) {
+      for (const f of seg.flags) {
+        f.s_from *= factor;
+        if (f.s_to !== null) f.s_to *= factor;
+      }
+    }
+  }
   const edits = editsFor(before, snapshot(idsOf(before)));
   scheduleRedraw();
   renderPanel();
@@ -706,9 +884,153 @@ function renderSegmentPanel(panel: HTMLElement, seg: Segment) {
     ),
     el("p", { class: "muted small" }, "OSM ways: ",
       ...seg.osm_way_ids.flatMap((w, i) => [i ? ", " : "", osmLink("way", w)])),
-    el("p", { class: "muted small" },
-      "Ends are fixed to the intersections' ports; move them from the intersection. Double-click the line to add a vertex; right-click a vertex to delete it."),
+    el("div", { class: "mode" },
+      modeButton("cross-section", "Cross-section"),
+      modeButton("centerline", "Centerline"),
+      el("span", { class: "muted small" }, "X switches"),
+    ),
   );
+  if (editMode === "centerline") {
+    panel.append(el("p", { class: "muted small" },
+      "Ends are fixed to the intersections' ports; move them from the intersection. Double-click the line to add a vertex; right-click a vertex to delete it."));
+  } else {
+    renderCrossSectionEditor(panel, seg);
+  }
+}
+
+function modeButton(mode: EditMode, label: string) {
+  const b = button(label, () => setEditMode(mode));
+  if (editMode === mode) b.classList.add("active");
+  return b;
+}
+
+function setEditMode(mode: EditMode) {
+  editMode = mode;
+  renderPanel();
+  scheduleRedraw();
+}
+
+/** Change one span of the selected segment, rejecting band lists the spec doesn't allow. */
+function editSpan(sid: string, si: number, mutate: (span: Span) => void) {
+  if (!area) return;
+  const before = snapshot({ clusters: [], segments: [sid], ports: [] });
+  mutate(area.segments[sid].spans![si]);
+  const problem = bandProblem(area.segments[sid].spans![si].bands);
+  if (problem) {
+    restore(before);
+    setStatus(problem, true);
+    renderPanel();
+    scheduleRedraw();
+    return;
+  }
+  commit(before);
+}
+
+function selectInput(options: readonly string[], value: string, onChange: (v: string) => void, labels?: Record<string, string>) {
+  const input = el("select");
+  for (const o of options) input.append(el("option", { value: o }, labels?.[o] ?? o.replaceAll("_", " ")));
+  input.value = value;
+  input.addEventListener("change", () => onChange(input.value));
+  return input;
+}
+
+const DIRECTION_LABELS = { forward: "→ forward", backward: "← backward", both: "↔ both" };
+
+function renderCrossSectionEditor(panel: HTMLElement, seg: Segment) {
+  if (!seg.spans) return;
+  const sid = seg.id;
+  panel.append(
+    el("h3", {}, "Cross-section"),
+    el("p", { class: "muted small" },
+      "Listed left to right, in the direction of the arrow on the road. Drag the cyan handles to change widths; drag any edge to add a width point there; right-click a handle to remove its width point."),
+  );
+  seg.spans.forEach((span, si) => {
+    if (seg.spans!.length > 1) panel.append(el("p", { class: "small" }, `From ${span.s_from.toFixed(1)} m to ${span.s_to.toFixed(1)} m`));
+    const list = el("div", { class: "xs-list" });
+    const widthText = (i: number) => {
+      const ws = span.width_points.map((wp) => wp.widths[i]);
+      const lo = Math.min(...ws), hi = Math.max(...ws);
+      return hi - lo < 0.05 ? `${lo.toFixed(2)} m` : `${lo.toFixed(2)}–${hi.toFixed(2)} m`;
+    };
+    const boundaryRow = (j: number) => {
+      const b = span.boundaries[j];
+      const add = el("select", { class: "add" });
+      add.append(el("option", { value: "" }, "+ band"));
+      for (const k of BAND_KINDS) add.append(el("option", { value: k }, KIND_LABELS[k]));
+      add.addEventListener("change", () => {
+        const kind = add.value as (typeof BAND_KINDS)[number];
+        if (kind) editSpan(sid, si, (s) => insertBand(s, j, kind));
+      });
+      return el("div", { class: "xs-boundary" },
+        selectInput(PHYSICAL, b.physical, (v) => editSpan(sid, si, (s) => { s.boundaries[j].physical = v as typeof b.physical; })),
+        selectInput(MARKINGS, b.marking, (v) => editSpan(sid, si, (s) => { s.boundaries[j].marking = v as typeof b.marking; })),
+        add,
+      );
+    };
+    span.bands.forEach((band, i) => {
+      list.append(boundaryRow(i));
+      const attrs = el("div", { class: "xs-attrs" });
+      const setAttr = (key: string, value: unknown) => editSpan(sid, si, (s) => { s.bands[i].attributes[key] = value; });
+      if (band.kind === "lane") {
+        attrs.append(
+          selectInput(LANE_DIRECTIONS, band.attributes.direction as string, (v) => setAttr("direction", v), DIRECTION_LABELS),
+          selectInput(LANE_TURNS, band.attributes.turn as string, (v) => setAttr("turn", v)),
+        );
+        const uses = el("span", { class: "uses" });
+        for (const u of LANE_USES) {
+          const box = el("input", { type: "checkbox" });
+          box.checked = (band.attributes.use as string[]).includes(u);
+          box.addEventListener("change", () => {
+            const current = new Set(band.attributes.use as string[]);
+            if (box.checked) current.add(u); else current.delete(u);
+            if (!current.size) return renderPanel(); // a lane needs at least one use
+            setAttr("use", LANE_USES.filter((x) => current.has(x)));
+          });
+          uses.append(el("label", { class: "check" }, box, u.replaceAll("_", " ")));
+        }
+        attrs.append(uses);
+      } else if (band.kind === "parking") {
+        attrs.append(
+          selectInput(PARKING_ARRANGEMENTS, band.attributes.arrangement as string, (v) => setAttr("arrangement", v)),
+          selectInput(PARKING_SURFACES, band.attributes.surface as string, (v) => setAttr("surface", v)),
+        );
+      } else if (band.kind === "median") {
+        attrs.append(selectInput(MEDIAN_SURFACES, band.attributes.surface as string, (v) => setAttr("surface", v)));
+      }
+      const kind = selectInput(BAND_KINDS, band.kind, (v) => editSpan(sid, si, (s) => {
+        const k = v as (typeof BAND_KINDS)[number];
+        s.bands[i] = { kind: k, attributes: defaultAttributes(k) };
+      }), KIND_LABELS);
+      const remove = button("✕", () => editSpan(sid, si, (s) => removeBand(s, i)));
+      remove.title = "Remove band";
+      list.append(el("div", { class: "xs-band" },
+        el("span", { class: "swatch", style: `background:${KIND_COLORS[band.kind]}` }),
+        kind,
+        el("span", { class: "muted small width" }, widthText(i)),
+        remove,
+        attrs,
+      ));
+    });
+    list.append(boundaryRow(span.bands.length));
+    panel.append(list, el("p", { class: "muted small" },
+      `${span.width_points.length} width point${span.width_points.length === 1 ? "" : "s"}`));
+  });
+  panel.append(el("div", { class: "buttons" }, button("Reset cross-section to OSM", () => resetCrossSection(sid))));
+}
+
+async function resetCrossSection(sid: string) {
+  if (!area) return;
+  const areaId = area.id;
+  await saving; // the server computes from the saved centerline
+  try {
+    const res = await api.defaultCrossSection(areaId, sid);
+    if (area?.id !== areaId) return;
+    const before = snapshot({ clusters: [], segments: [sid], ports: [] });
+    area.segments[sid].spans = res.spans;
+    commit(before);
+  } catch (err) {
+    setStatus((err as Error).message, true);
+  }
 }
 
 async function changeTemplate(cid: string, type: TemplateType, resetPorts: boolean) {
@@ -748,9 +1070,11 @@ async function loadArea(id: string, fit = true) {
   setStatus("Loading…");
   const state = await api.getArea(id);
   area = state;
+  overlayCache.clear();
   showImagery(state.imagery);
   $("area-imagery").textContent = `Imagery: ${state.imagery.name}, locked to this area`;
   converter = proj4("EPSG:4326", utmDefinition(state.epsg)) as unknown as Converter;
+  setMetricWidths((state.bbox[1] + state.bbox[3]) / 2);
   if (selection && !(selection.kind === "cluster" ? state.clusters[selection.id] : state.segments[selection.id])) {
     selection = null;
   }
@@ -803,16 +1127,42 @@ function handleAt(e: MapMouseEvent): number | null {
 }
 
 function bindMapEvents() {
-  map.on("mousedown", "handles", (e) => {
+  map.on("mousedown", (e) => {
+    if (e.originalEvent.button !== 0 || !selection || !area) return;
     const index = handleAt(e);
-    if (index === null || e.originalEvent.button !== 0 || !handles[index]?.drag || !selection) return;
-    e.preventDefault(); // stops the map panning
-    dragging = { index, before: snapshot(relatedIds(selection)) };
+    const drag = index === null ? null : handles[index]?.drag;
+    if (drag) {
+      e.preventDefault(); // stops the map panning
+      dragging = { drag, before: snapshot(relatedIds(selection)) };
+      map.getCanvas().style.cursor = "grabbing";
+      return;
+    }
+    // Cross-section mode: dragging an edge of the selected segment adds a width point there.
+    if (selection.kind !== "segment" || editMode !== "cross-section") return;
+    const hit = map.queryRenderedFeatures(e.point, { layers: ["xs-hit"] })[0];
+    if (!hit) return;
+    const sid = selection.id;
+    const seg = area.segments[sid];
+    if (!seg.centerline || !seg.spans) return;
+    e.preventDefault();
+    const before = snapshot(relatedIds(selection));
+    const s = arcLengthOf(seg.centerline, toXY(e.lngLat));
+    const si = spanIndexAt(seg.spans, s);
+    const span = seg.spans[si];
+    let k = span.width_points.findIndex((wp) => Math.abs(wp.s - s) < 1.5);
+    if (k < 0) {
+      const { widths, shift } = widthsAt(span, s);
+      span.width_points.push({ s, widths, shift });
+      span.width_points.sort((a, b) => a.s - b.s);
+      k = span.width_points.findIndex((wp) => wp.s === s);
+    }
+    dragging = { drag: widthDrag(sid, si, k, hit.properties.boundary as number), before };
     map.getCanvas().style.cursor = "grabbing";
+    scheduleRedraw();
   });
   map.on("mousemove", (e) => {
     if (!dragging) return;
-    handles[dragging.index]?.drag?.(toXY(e.lngLat));
+    dragging.drag(toXY(e.lngLat));
     scheduleRedraw();
   });
   map.on("mouseup", () => {
@@ -822,8 +1172,10 @@ function bindMapEvents() {
     map.getCanvas().style.cursor = "";
     commit(before);
   });
-  map.on("mouseenter", "handles", () => { if (!dragging) map.getCanvas().style.cursor = "grab"; });
-  map.on("mouseleave", "handles", () => { if (!dragging) map.getCanvas().style.cursor = ""; });
+  for (const layer of ["handles", "xs-hit"]) {
+    map.on("mouseenter", layer, () => { if (!dragging) map.getCanvas().style.cursor = "grab"; });
+    map.on("mouseleave", layer, () => { if (!dragging) map.getCanvas().style.cursor = ""; });
+  }
 
   map.on("contextmenu", "handles", (e) => {
     const index = handleAt(e);
@@ -850,6 +1202,7 @@ function bindMapEvents() {
     const tolerance = metresPerPixel(e.point) * CLICK_TOLERANCE_PX;
     const sel = selection;
     if (sel.kind === "segment") {
+      if (editMode !== "centerline") return;
       const line = area.segments[sel.id].centerline;
       if (!line) return;
       const near = nearestOnPolyline(line, q);
@@ -889,6 +1242,11 @@ function bindKeys() {
       }
     } else if (e.key === "Escape") {
       select(null);
+    } else if (e.key === "x" || e.key === "X") {
+      setEditMode(editMode === "centerline" ? "cross-section" : "centerline");
+    } else if (e.key === "b" || e.key === "B") {
+      showBands = !showBands;
+      scheduleRedraw();
     } else if (e.key === "o" || e.key === "O") {
       showOsm = !showOsm;
       scheduleRedraw();

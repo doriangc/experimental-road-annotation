@@ -33,17 +33,27 @@ Tests: `cd backend && uv run pytest`.
    - **green:** ring radius;
    - **white:** port (the segment's end follows it over its first 20 m);
    - **pink:** port heading.
-4. Press **D** to mark it done and move on. Once the intersections are done, **N** moves on to segments: drag their
-   vertices, double-click to add one, right-click to delete one.
-5. **Ctrl+Z** undoes, **O** toggles the OSM overlay, and `#cluster=c12` / `#segment=s40` in the URL links to an item.
-6. **Export GeoJSON** writes template curves and segment centerlines resampled into 0.1 m slices.
+4. Press **D** to mark it done and move on. Once the intersections are done, **N** moves on to segments.
+5. Segments open in **cross-section** mode. The overlay shows the bands (lanes, cycle lanes, parking, sidewalks…),
+   kerbs and markings, prefilled from OSM tags. The sidebar lists the bands left to right in the direction of the
+   white chevron on the road.
+   - **Widths:** drag the cyan handles. Dragging any edge of the selected segment adds a width point there; widths
+     are interpolated between width points. Right-click a handle to remove its width point.
+   - **Bands:** in the sidebar, change a band's kind and attributes, add bands with **+ band** between them, set
+     each boundary's edge (kerb, flush…) and marking.
+   - **Centreline:** press **X** to switch to centreline editing. Drag vertices, double-click to add one,
+     right-click to delete one.
+6. **Ctrl+Z** undoes, **B** toggles the cross-section overlay, **O** the OSM overlay, and `#cluster=c12` /
+   `#segment=s40` in the URL links to an item.
+7. **Export GeoJSON** writes template curves and segment centerlines resampled into 0.1 m slices.
 
 Each area lives in `data/areas/<id>/` (`osm.json` is the raw Overpass response, `state.json` holds everything else;
 coordinates are metres in the area's UTM zone). Every edit is saved immediately.
 
 ## Differences from the spec (first version)
 
-- No road cross-sections yet (bands, widths, markings, parking, sidewalks) and no cross-section overlay.
+- Cross-sections have one structure span per segment: spans can't be split yet, and there's no repeat tool.
+- No cross-sections inside intersections yet (kerb corner radii, roundabout ring and apron widths).
 - No `staggered` template and no dual-carriageway arms yet: each port is its own arm. Multi-junction clusters that
   aren't roundabouts default to `freeform`.
 - Clusters can't be merged or split in the editor.

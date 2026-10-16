@@ -44,7 +44,8 @@ Tests: `cd backend && uv run pytest`.
    - **Centreline:** press **X** to switch to centreline editing. Drag vertices, double-click to add one,
      right-click to delete one.
 6. **Ctrl+Z** undoes, **B** toggles the cross-section overlay, **O** the OSM overlay, and `#cluster=c12` /
-   `#segment=s40` in the URL links to an item.
+   `#segment=s40` in the URL links to an item. **G** opens the current view in Google Maps (satellite), **V** opens
+   Street View at the map centre (facing along the selected road), and **M** opens it on openstreetmap.org.
 7. **Export GeoJSON** writes template curves and segment centerlines resampled into 0.1 m slices.
 
 Each area lives in `data/areas/<id>/` (`osm.json` is the raw Overpass response, `state.json` holds everything else;

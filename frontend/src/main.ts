@@ -742,6 +742,40 @@ function nextUnreviewed() {
   setStatus("Everything in this area has been reviewed.");
 }
 
+// ---------------------------------------------------------------- other maps
+
+type ExternalMap = "google" | "streetview" | "osm";
+
+/**
+ * Open the current view in another map. MapLibre zoom levels are for 512 px
+ * tiles; Google and OSM use 256 px tiles, so their zoom is one higher.
+ */
+function openExternal(target: ExternalMap) {
+  const { lng, lat } = map.getCenter();
+  const zoom = Math.round(map.getZoom() + 1);
+  const ll = `${lat.toFixed(6)},${lng.toFixed(6)}`;
+  let url: string;
+  if (target === "google") {
+    url = `https://www.google.com/maps/@?api=1&map_action=map&center=${ll}&zoom=${Math.min(zoom, 21)}&basemap=satellite`;
+  } else if (target === "streetview") {
+    url = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${ll}`;
+    const heading = roadHeading();
+    if (heading !== null) url += `&heading=${heading.toFixed(0)}`;
+  } else {
+    url = `https://www.openstreetmap.org/#map=${Math.min(zoom, 19)}/${lat.toFixed(6)}/${lng.toFixed(6)}`;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+/** Compass heading (degrees) of the selected segment where it passes the map centre, if one is selected. */
+function roadHeading(): number | null {
+  if (!area || !converter || selection?.kind !== "segment") return null;
+  const line = area.segments[selection.id].centerline;
+  if (!line) return null;
+  const st = stationAt(line, arcLengthOf(line, toXY(map.getCenter())));
+  return ((Math.atan2(st.forward[0], st.forward[1]) * 180) / Math.PI + 360) % 360;
+}
+
 function setSelectionStatus(status: "done" | "unreviewed") {
   if (!selection) return;
   const sel = selection;
@@ -1242,6 +1276,12 @@ function bindKeys() {
       }
     } else if (e.key === "Escape") {
       select(null);
+    } else if (e.key === "g" || e.key === "G") {
+      openExternal("google");
+    } else if (e.key === "v" || e.key === "V") {
+      openExternal("streetview");
+    } else if (e.key === "m" || e.key === "M") {
+      openExternal("osm");
     } else if (e.key === "x" || e.key === "X") {
       setEditMode(editMode === "centerline" ? "cross-section" : "centerline");
     } else if (e.key === "b" || e.key === "B") {
